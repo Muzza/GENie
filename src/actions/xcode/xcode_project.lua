@@ -29,6 +29,22 @@
 				cfg.xcode.targetid = xcode.newid(prj.xcode.projectnode, cfgname)
 				cfg.xcode.projectid = xcode.newid(tr, cfgname)
 				table.insert(tr.configs, cfg)
+
+                -- add any defined resourcefolderrefs to the tree
+                local isvpath
+		        local function onadd(node)
+			        node.isvpath = isvpath
+		        end
+		        for i=1, #cfg.resourcefolderrefs do
+                    local folder = {}
+                    folder.name = cfg.resourcefolderrefs[i]
+    				folder.vpath = premake.project.getvpath(prj, node.cfg.name)
+                    isvpath = (folder.name ~= folder.vpath)
+			        local node = premake.tree.add(tr, cfg.resourcefolderrefs[i], onadd)
+			        node.cfg = folder
+                    node.isfolder = true
+		        end
+
 			end
 		end
 		
@@ -110,7 +126,7 @@
 				node.id = xcode.newid(node)
 				
 				-- assign build IDs to buildable files
-				if xcode.getbuildcategory(node) then
+				if xcode.getbuildcategory(node,prj) then
 					node.buildid = xcode.newid(node, "build")
 				end
 
@@ -131,6 +147,9 @@
 		node.resstageid = xcode.newid(node, "rez")
 		node.sourcesid  = xcode.newid(node, "src")
 		node.fxstageid  = xcode.newid(node, "fxs")
+        node.copystageids = {}
+		node.copystageids[6]  = xcode.newid(node, "cp6")
+		node.copystageids[7]  = xcode.newid(node, "cp7")
 
 		return tr
 	end
@@ -146,15 +165,16 @@
 	function premake.xcode.project(prj)
 		local tr = xcode.buildprjtree(prj)
 		xcode.Header(tr)
-		xcode.PBXBuildFile(tr)
+		xcode.PBXBuildFile(tr,prj)
 		xcode.PBXContainerItemProxy(tr)
+		xcode.PBXCopyFilesBuildPhase(tr,prj)
 		xcode.PBXFileReference(tr,prj)
 		xcode.PBXFrameworksBuildPhase(tr)
 		xcode.PBXGroup(tr)
-		xcode.PBXNativeTarget(tr)
+		xcode.PBXNativeTarget(tr,prj)
 		xcode.PBXProject(tr)
 		xcode.PBXReferenceProxy(tr)
-		xcode.PBXResourcesBuildPhase(tr)
+		xcode.PBXResourcesBuildPhase(tr,prj)
 		xcode.PBXShellScriptBuildPhase(tr)
 		xcode.PBXSourcesBuildPhase(tr,prj)
 		xcode.PBXVariantGroup(tr)

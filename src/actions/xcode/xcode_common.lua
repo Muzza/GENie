@@ -15,14 +15,20 @@
 --    An Xcode build category, one of "Sources", "Resources", "Frameworks", or nil.
 --
 
-	function xcode.getbuildcategory(node)
+	function xcode.getbuildcategory(node,prj)
+        if node.cfg and table.icontains(prj.resources, node.cfg.name) then -- if in the resource list
+            return "Resources"
+        end
+        if node.isfolder==true then
+            return "Resources"
+        end
 		local categories = {
 			[".a"] = "Frameworks",
 			[".c"] = "Sources",
 			[".cc"] = "Sources",
 			[".cpp"] = "Sources",
 			[".cxx"] = "Sources",
-			[".dylib"] = "Frameworks",
+			[".dylib"] = "CopyFiles",   -- NOTE: dylib's must be in both links {} and files {} (to ensure the lib is copied alongside the executable)
 			[".framework"] = "Frameworks",
 			[".m"] = "Sources",
 			[".mm"] = "Sources",
@@ -66,12 +72,16 @@
 --
 
 	function xcode.getfiletype(node)
+        if node.isfolder==true then
+            return "folder"
+        end
 		local types = {
 			[".c"]         = "sourcecode.c.c",
 			[".cc"]        = "sourcecode.cpp.cpp",
 			[".cpp"]       = "sourcecode.cpp.cpp",
 			[".css"]       = "text.css",
 			[".cxx"]       = "sourcecode.cpp.cpp",
+			[".dylib"]     = "compiled.mach-o.dylib",
 			[".framework"] = "wrapper.framework",
 			[".gif"]       = "image.gif",
 			[".h"]         = "sourcecode.c.h",
@@ -88,7 +98,7 @@
 			[".bmp"]       = "image.bmp",
 			[".wav"]       = "audio.wav",
 		}
-		return types[path.getextension(node.path)] or "text"
+		return types[path.getextension(node.path)] or "file"
 	end
 
 --
@@ -107,6 +117,7 @@
 			[".cpp"]       = "sourcecode.cpp.cpp",
 			[".css"]       = "text.css",
 			[".cxx"]       = "sourcecode.cpp.cpp",
+			[".dylib"]     = "compiled.mach-o.dylib",
 			[".framework"] = "wrapper.framework",
 			[".gif"]       = "image.gif",
 			[".h"]         = "sourcecode.cpp.h",
@@ -123,7 +134,7 @@
 			[".bmp"]       = "image.bmp",
 			[".wav"]       = "audio.wav",
 		}
-		return types[path.getextension(node.path)] or "text"
+		return types[path.getextension(node.path)] or "file"
 	end
 --
 -- Return the Xcode product type, based target kind.
@@ -284,13 +295,17 @@
 	end
 
 
-	function xcode.PBXBuildFile(tr)
+	function xcode.PBXBuildFile(tr,prj)
 		_p('/* Begin PBXBuildFile section */')
 		tree.traverse(tr, {
 			onnode = function(node)
 				if node.buildid then
-					_p(2,'%s /* %s in %s */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };', 
-						node.buildid, node.name, xcode.getbuildcategory(node), node.id, node.name)
+                    local attributes = ''
+                    if xcode.getbuildcategory(node,prj)=='CopyFiles' then
+                        attributes = 'settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; '
+                    end
+					_p(2,'%s /* %s in %s */ = {isa = PBXBuildFile; fileRef = %s /* %s */; %s};', 
+						node.buildid, node.name, xcode.getbuildcategory(node,prj), node.id, node.name, attributes)
 				end
 			end
 		})
@@ -323,6 +338,53 @@
 		end
 	end
 
+    local function buildcopyfileslist(tr,prj,dstFolderType)
+        local files = {}
+		tree.traverse(tr, {
+			onleaf = function(node)
+				-- I'm only listing files here, so ignore anything without a path
+				if not node.path then
+					return
+				end
+                if xcode.getbuildcategory(node,prj)=='CopyFiles' then
+                    if path.getextension(node.name)=='.dylib' and dstFolderType==6 then
+                        table.insert(files, node)
+                    elseif path.getextension(node.name)~='.dylib' and dstFolderType==7 then
+                        table.insert(files, node)
+                    end
+                end
+            end
+        })
+        return files
+    end
+
+	function xcode.PBXCopyFilesBuildPhase(tr,prj)
+		_p('/* Begin PBXCopyFilesBuildPhase section */')
+		for _, target in ipairs(tr.products.children) do
+
+            -- dstSubfolderSpec=6 is copy to executables, dstSubfolderSpec=7 is copy to resources
+            for dstSubfolderSpec = 6, 7 do
+                local nodes = buildcopyfileslist(tr,prj,dstSubfolderSpec)
+                if #nodes>0 then
+	                _p(2,'%s /* CopyFiles */ = {', target.copystageids[dstSubfolderSpec])
+			        _p(3,'isa = PBXCopyFilesBuildPhase;')
+			        _p(3,'buildActionMask = 2147483647;')
+			        _p(3,'dstPath = "";')
+                    _p(3,'dstSubfolderSpec = %d;', dstSubfolderSpec)
+                    _p(3,'files = (')
+                    for i = 1, #nodes do
+                        local node = nodes[i]
+                        _p(4,'%s /* %s in CopyFiles */,', node.buildid, node.name)
+                    end
+                    _p(3,');')
+                    _p(3,'runOnlyForDeploymentPostprocessing = 0;')
+                    _p(2,'};')
+                end
+            end
+        end		
+		_p('/* End PBXCopyFilesBuildPhase section */')
+		_p('')
+	end
 
 	function xcode.PBXFileReference(tr,prj)
 		_p('/* Begin PBXFileReference section */')
@@ -482,7 +544,7 @@
 	end	
 
 
-	function xcode.PBXNativeTarget(tr)
+	function xcode.PBXNativeTarget(tr,prj)
 		_p('/* Begin PBXNativeTarget section */')
 		for _, node in ipairs(tr.products.children) do
 			local name = tr.project.name
@@ -517,6 +579,12 @@
 				_p(4,'9607AE3510C85E7E00CD1376 /* Prelink */,')
 			end
 			_p(4,'%s /* Frameworks */,', node.fxstageid)
+            for dstSubfolderSpec = 6, 7 do
+                local nodes = buildcopyfileslist(tr,prj,dstSubfolderSpec)
+                if #nodes>0 then
+    			    _p(4,'%s /* CopyFiles */,', node.copystageids[dstSubfolderSpec])
+                end
+            end
 			if hasBuildCommands('postbuildcommands') then
 				_p(4,'9607AE3710C85E8F00CD1376 /* Postbuild */,')
 			end
@@ -605,7 +673,7 @@
 	end
 	
 
-	function xcode.PBXResourcesBuildPhase(tr)
+	function xcode.PBXResourcesBuildPhase(tr,prj)
 		_p('/* Begin PBXResourcesBuildPhase section */')
 		for _, target in ipairs(tr.products.children) do
 			_p(2,'%s /* Resources */ = {', target.resstageid)
@@ -614,7 +682,7 @@
 			_p(3,'files = (')
 			tree.traverse(tr, {
 				onnode = function(node)
-					if xcode.getbuildcategory(node) == "Resources" then
+					if xcode.getbuildcategory(node,prj) == "Resources" then
 						_p(4,'%s /* %s in Resources */,', node.buildid, node.name)
 					end
 				end
@@ -688,7 +756,7 @@
 			_p(3,'files = (')
 			tree.traverse(tr, {
 				onleaf = function(node)
-					if xcode.getbuildcategory(node) == "Sources" then
+					if xcode.getbuildcategory(node,prj) == "Sources" then
         				if not table.icontains(prj.excludes, node.cfg.name) then -- if not excluded
 						_p(4,'%s /* %s in Sources */,', node.buildid, node.name)
                         end

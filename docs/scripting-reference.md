@@ -89,6 +89,8 @@
     * [resdefines](#resdefinessymbols)
     * [resincludedirs](#resincludedirspaths)
     * [resoptions](#resoptionsoptions)
+    * [resources](#resources)
+    * [resourcefolderrefs](#resourcefolderrefs)	
     * [solution](#solutionname)
     * [string.endswith](#stringendswithhaystack-needle)
     * [string.explode](#stringexplodestr-pattern)
@@ -269,6 +271,8 @@ Current configuration object with the following fields:
 * _resdefines_        - list of symbols for the resource compiler.
 * _resincludedirs_    - list of include file search paths for the resource compiler.
 * _resoptions_        - list of resource compiler options.
+* _resources_         - list of files that are to be included as resources.
+* _resourcefolderrefs_ - folders to add as resource reference groups in xcode.
 * _targetdir_         - target output directory.
 * _targetextension_   - target file extension.
 * _targetname_        - target base file name.
@@ -1738,6 +1742,39 @@ _options_ - list of resource compiler flags and options
 ```lua
 configuration { "linux", "gmake" }
     resoptions { "`wx-config --cxxflags`", "-ansi", "-pedantic" }
+```
+[Back to top](#table-of-contents)
+
+---
+### resources({_files_...})
+Marks files added with the [`files`](#files) function as being resources to be included in xcode bundles. Multiple calls are concatenated.
+Note that XCode will include resource files at the root of the bundle, regardless of folder layout. This is an XCode limitation. Use [`resourcefolderrefs`](#resourcefolderrefs) to preserve the resource path.
+
+**Scope:** projects
+
+#### Arguments
+_files_ - list of resource files
+
+#### Examples
+```lua
+files { "MyDataFolder/MyResourceFile.data", "MySrc.cpp" }
+resources { "**.data" }
+```
+[Back to top](#table-of-contents)
+
+---
+### resourcefolderrefs({_folders_...})
+Specifies folders to be included as resources in XCode. The folders are included as a reference and will preserve their path within the bundle.
+
+**Scope:** projects
+
+#### Arguments
+_folders_ - list of folders to be included as resources
+
+#### Examples
+You have the files: DataFolder/File1.data, DataFolder/Other/File2.data
+```lua
+resourcefolderrefs { "DataFolder" }
 ```
 [Back to top](#table-of-contents)
 

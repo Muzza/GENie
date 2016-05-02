@@ -115,6 +115,19 @@
 			scope = "config",
 		},
 
+		resources =     -- tags files as a resource in xcode, each resource must be in files {} as well as resources {}
+		{
+			kind  = "filelist",
+			scope = "config",
+		},
+
+		resourcefolderrefs =  -- folders to add as resource groups in xcode. see docs
+		{
+			kind  = "dirlist",
+			scope = "config",
+			usagecopy = true,
+		},
+
 		nopch =
 		{
 			kind  = "filelist",
