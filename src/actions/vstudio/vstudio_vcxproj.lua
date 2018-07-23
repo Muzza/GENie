@@ -10,6 +10,15 @@
 
 
 	local function vs2010_config(prj)
+		-- only include this bit if there's a Tegra platform in there
+		for _, cfginfo in ipairs(prj.solution.vstudio_configs) do
+			if cfginfo.src_platform == "TegraAndroid" then
+				_p(1,'<PropertyGroup Label="NsightTegraProject">')
+					_p(2,'<NsightTegraProjectRevisionNumber>11</NsightTegraProjectRevisionNumber>')
+				_p(1,'</PropertyGroup>')
+				break
+			end
+		end
 		_p(1,'<ItemGroup Label="ProjectConfigurations">')
 		for _, cfginfo in ipairs(prj.solution.vstudio_configs) do
 				_p(2,'<ProjectConfiguration Include="%s">', premake.esc(cfginfo.name))
@@ -38,7 +47,8 @@
 		--if prj.flags is required as it is not set at project level for tests???
 		--vs200x generator seems to swap a config for the prj in test setup
 		if prj.flags and prj.flags.Managed then
-			_p(2, '<TargetFrameworkVersion>v4.0</TargetFrameworkVersion>')
+			local frameworkVersion = prj.framework or "4.0"
+			_p(2, '<TargetFrameworkVersion>v%s</TargetFrameworkVersion>', frameworkVersion)
 			_p(2, '<Keyword>ManagedCProj</Keyword>')
 		elseif vstudio.iswinrt() then
 			_p(2, '<DefaultLanguage>en-US</DefaultLanguage>')
@@ -50,11 +60,7 @@
 			else
 				_p(2, '<AppContainerApplication>true</AppContainerApplication>')
 				_p(2, '<MinimumVisualStudioVersion>12.0</MinimumVisualStudioVersion>')
-				if vstudio.toolset == "v120_wp81" then
-					_p(2, '<ApplicationType>Windows Phone</ApplicationType>')
-				else
-					_p(2, '<ApplicationType>Windows Store</ApplicationType>')
-				end
+				_p(2, '<ApplicationType>Windows Store</ApplicationType>')
 				_p(2, '<ApplicationTypeRevision>%s</ApplicationTypeRevision>', vstudio.storeapp)
 			end
 		else
@@ -102,12 +108,16 @@
 --
 
 	function vc2010.configurationPropertyGroup(cfg, cfginfo)
-		_p(1,'<PropertyGroup '..if_config_and_platform() ..' Label="Configuration">'
-				, premake.esc(cfginfo.name))
-		_p(2,'<ConfigurationType>%s</ConfigurationType>',vc2010.config_type(cfg))
-		_p(2,'<UseDebugLibraries>%s</UseDebugLibraries>', iif(optimisation(cfg) == "Disabled","true","false"))
+		_p(1, '<PropertyGroup '..if_config_and_platform() ..' Label="Configuration">'
+			, premake.esc(cfginfo.name))
+		_p(2, '<ConfigurationType>%s</ConfigurationType>',vc2010.config_type(cfg))
+		_p(2, '<UseDebugLibraries>%s</UseDebugLibraries>', iif(optimisation(cfg) == "Disabled","true","false"))
 
-		_p(2,'<PlatformToolset>%s</PlatformToolset>', premake.vstudio.toolset)
+		_p(2, '<PlatformToolset>%s</PlatformToolset>', premake.vstudio.toolset)
+
+		if os.is64bit() then
+			_p(2, '<PreferredToolArchitecture>x64</PreferredToolArchitecture>')
+		end
 
 		if cfg.flags.MFC then
 			_p(2,'<UseOfMfc>%s</UseOfMfc>', iif(cfg.flags.StaticRuntime, "Static", "Dynamic"))
@@ -117,9 +127,48 @@
 			_p(2,'<UseOfAtl>%s</UseOfAtl>', iif(cfg.flags.StaticATL, "Static", "Dynamic"))
 		end
 
+		if cfg.flags.Unicode then
+			_p(2,'<CharacterSet>Unicode</CharacterSet>')
+		end
+
 		if cfg.flags.Managed then
 			_p(2,'<CLRSupport>true</CLRSupport>')
 		end
+
+		if cfg.platform == "TegraAndroid" then
+			if cfg.androidtargetapi then
+				_p(2,'<AndroidTargetAPI>android-%s</AndroidTargetAPI>', cfg.androidtargetapi)
+			end
+			if cfg.androidminapi then
+				_p(2,'<AndroidMinAPI>android-%s</AndroidMinAPI>', cfg.androidminapi)
+			end
+			if cfg.androidarch then
+				_p(2,'<AndroidArch>%s</AndroidArch>', cfg.androidarch)
+			end
+			if cfg.androidndktoolchainversion then
+				_p(2,'<NdkToolchainVersion>%s</NdkToolchainVersion>', cfg.androidndktoolchainversion)
+			end
+			if cfg.androidstltype then
+				_p(2,'<AndroidStlType>%s</AndroidStlType>', cfg.androidstltype)
+			end
+		end
+
+		if cfg.platform == "NX64" then		
+			_p(2,'<NintendoSdkRoot>$(NINTENDO_SDK_ROOT)</NintendoSdkRoot>')
+			_p(2,'<NintendoSdkSpec>NX</NintendoSdkSpec>')
+			--TODO: Allow specification of the 'Develop' build type
+			if premake.config.isdebugbuild(cfg) then
+				_p(2,'<NintendoSdkBuildType>Debug</NintendoSdkBuildType>')
+			else
+				_p(2,'<NintendoSdkBuildType>Release</NintendoSdkBuildType>')
+			end
+		end
+
+		-- Workaround for https://github.com/Microsoft/msbuild/issues/2353
+		if cfg.flags.Symbols and premake.action.current() == premake.action.get("vs2017") then
+			_p(2, '<DebugSymbols>true</DebugSymbols>')
+		end
+
 		_p(1,'</PropertyGroup>')
 	end
 
@@ -130,6 +179,14 @@
 			_p(1,'<ImportGroup '..if_config_and_platform() ..' Label="PropertySheets">'
 					,premake.esc(cfginfo.name))
 				_p(2,'<Import Project="$(UserRootDir)\\Microsoft.Cpp.$(Platform).user.props" Condition="exists(\'$(UserRootDir)\\Microsoft.Cpp.$(Platform).user.props\')" Label="LocalAppDataPlatform" />')
+
+			if #cfg.propertysheets > 0 then
+				local dirs = cfg.propertysheets
+				for _, dir in ipairs(dirs) do
+					_p(2,'<Import Project="%s" />', path.translate(dir))
+				end
+			end
+
 			_p(1,'</ImportGroup>')
 		end
 	end
@@ -146,11 +203,16 @@
 			local cfg = premake.getconfig(prj, cfginfo.src_buildcfg, cfginfo.src_platform)
 			local target = cfg.buildtarget
 			local outdir = add_trailing_backslash(target.directory)
-			local intdir = add_trailing_backslash(cfg.objectsdir)
+			local intdir = add_trailing_backslash(iif(action.vstudio.intDirAbsolute
+							, path.translate(
+								  path.join(prj.solution.location, cfg.objectsdir)
+								, '\\')
+							, cfg.objectsdir
+							))
 
 			_p(1,'<PropertyGroup '..if_config_and_platform() ..'>', premake.esc(cfginfo.name))
 
-			_p(2,'<OutDir>%s</OutDir>', premake.esc(outdir))
+			_p(2,'<OutDir>%s</OutDir>', iif(outdir:len() > 0, premake.esc(outdir), ".\\"))
 
 			if cfg.platform == "Xbox360" then
 				_p(2,'<OutputFile>$(OutDir)%s</OutputFile>', premake.esc(target.name))
@@ -171,13 +233,27 @@
 				_p(2, '<LibraryWPath>$(Console_SdkLibPath);$(Console_SdkWindowsMetadataPath)</LibraryWPath>')
 				_p(2, '<IncludePath>$(Console_SdkIncludeRoot)</IncludePath>')
 				_p(2, '<ExecutablePath>$(Console_SdkRoot)bin;$(VCInstallDir)bin\\x86_amd64;$(VCInstallDir)bin;$(WindowsSDK_ExecutablePath_x86);$(VSInstallDir)Common7\\Tools\\bin;$(VSInstallDir)Common7\\tools;$(VSInstallDir)Common7\\ide;$(ProgramFiles)\\HTML Help Workshop;$(MSBuildToolsPath32);$(FxCopDir);$(PATH);</ExecutablePath>')
-				_p(2, '<LayoutDir>%s</LayoutDir>', prj.name)
+
+				if cfg.imagepath then
+					_p(2, '<LayoutDir>%s</LayoutDir>', cfg.imagepath)
+				else
+					_p(2, '<LayoutDir>%s</LayoutDir>', prj.name)
+				end
+
+				if cfg.pullmappingfile ~= nil then
+					_p(2,'<PullMappingFile>%s</PullMappingFile>', premake.esc(cfg.pullmappingfile))
+				end
+
 				_p(2, '<LayoutExtensionFilter>*.pdb;*.ilk;*.exp;*.lib;*.winmd;*.appxrecipe;*.pri;*.idb</LayoutExtensionFilter>')
 				_p(2, '<IsolateConfigurationsOnDeploy>true</IsolateConfigurationsOnDeploy>')
 			end
 
 			if cfg.kind ~= "StaticLib" then
 				_p(2,'<LinkIncremental>%s</LinkIncremental>', tostring(premake.config.isincrementallink(cfg)))
+			end
+
+			if cfg.applicationdatadir ~= nil then
+				_p(2,'<ApplicationDataDir>%s</ApplicationDataDir>', premake.esc(cfg.applicationdatadir))
 			end
 
 			if cfg.flags.NoManifest then
@@ -208,36 +284,72 @@
 		end
 	end
 
-	local function preprocessor(indent,cfg)
+	local function preprocessor(indent,cfg,escape)
 		if #cfg.defines > 0 then
+			-- Visual Studio requires escaping of command line arguments to RC.
+			local defines = table.concat(cfg.defines, ";")
+			if escape then
+				defines = defines:gsub('"', '\\"')
+			end
+
 			_p(indent,'<PreprocessorDefinitions>%s;%%(PreprocessorDefinitions)</PreprocessorDefinitions>'
-				,premake.esc(table.concat(cfg.defines, ";")))
+				,premake.esc(defines))
 		else
 			_p(indent,'<PreprocessorDefinitions></PreprocessorDefinitions>')
 		end
 	end
 
 	local function include_dirs(indent,cfg)
-		if #cfg.includedirs > 0 then
+		local includedirs = table.join(cfg.userincludedirs, cfg.includedirs, cfg.systemincludedirs)
+
+		if #includedirs> 0 then
 			_p(indent,'<AdditionalIncludeDirectories>%s;%%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>'
-					,premake.esc(path.translate(table.concat(cfg.includedirs, ";"), '\\')))
+					,premake.esc(path.translate(table.concat(includedirs, ";"), '\\')))
+		end
+	end
+
+	local function using_dirs(indent,cfg)
+		if #cfg.usingdirs > 0 then
+			_p(indent,'<AdditionalUsingDirectories>%s;%%(AdditionalUsingDirectories)</AdditionalUsingDirectories>'
+					,premake.esc(path.translate(table.concat(cfg.usingdirs, ";"), '\\')))
 		end
 	end
 
 	local function resource_compile(cfg)
 		_p(2,'<ResourceCompile>')
-			preprocessor(3,cfg)
+			preprocessor(3,cfg,true)
 			include_dirs(3,cfg)
 		_p(2,'</ResourceCompile>')
 
 	end
 
+	local function cppstandard_vs2017(cfg)
+		if cfg.flags.CppLatest then
+			_p(3, '<LanguageStandard>stdcpplatest</LanguageStandard>')
+			_p(3, '<EnableModules>true</EnableModules>')
+		elseif cfg.flags.Cpp17 then
+			_p(3, '<LanguageStandard>stdcpp17</LanguageStandard>')
+		elseif cfg.flags.Cpp14 then
+			_p(3, '<LanguageStandard>stdcpp14</LanguageStandard>')
+		end
+	end
+
 	local function exceptions(cfg)
-		if cfg.flags.NoExceptions then
-			_p(3, '<ExceptionHandling>false</ExceptionHandling>')
-		elseif cfg.flags.SEH then
-			_p(3, '<ExceptionHandling>Async</ExceptionHandling>')
-		--SEH is not required for Managed and is implied
+		if cfg.platform == "Orbis" then
+			if cfg.flags.NoExceptions then
+				_p(3, '<CppExceptions>false</CppExceptions>')
+			end
+		elseif cfg.platform == "TegraAndroid" then
+			if cfg.flags.NoExceptions then
+				_p(3, '<GccExceptionHandling>false</GccExceptionHandling>')
+			end
+		else
+			if cfg.flags.NoExceptions then
+				_p(3, '<ExceptionHandling>false</ExceptionHandling>')
+			elseif cfg.flags.SEH then
+				_p(3, '<ExceptionHandling>Async</ExceptionHandling>')
+			--SEH is not required for Managed and is implied
+			end
 		end
 	end
 
@@ -276,10 +388,18 @@
 	end
 
 	local function floating_point(cfg)
-	     if cfg.flags.FloatFast then
-			_p(3,'<FloatingPointModel>Fast</FloatingPointModel>')
-		elseif cfg.flags.FloatStrict and not cfg.flags.Managed then
-			_p(3,'<FloatingPointModel>Strict</FloatingPointModel>')
+		if cfg.platform == "Orbis" then
+			if cfg.flags.FloatFast then
+				_p(3,'<FastMath>true</FastMath>')
+			end
+		elseif cfg.platform == "TegraAndroid" then
+			-- TODO: tegra setting
+		else
+			if cfg.flags.FloatFast then
+				_p(3,'<FloatingPointModel>Fast</FloatingPointModel>')
+			elseif cfg.flags.FloatStrict and not cfg.flags.Managed then
+				_p(3,'<FloatingPointModel>Strict</FloatingPointModel>')
+			end
 		end
 	end
 
@@ -292,12 +412,14 @@
 	--
 		local debug_info = ''
 		if cfg.flags.Symbols then
-			if (action.vstudio.supports64bitEditContinue == false and cfg.platform == "x64")
+			if cfg.flags.C7DebugInfo then
+				debug_info = "OldStyle"
+			elseif (action.vstudio.supports64bitEditContinue == false and cfg.platform == "x64")
 				or cfg.flags.Managed
 				or premake.config.isoptimizedbuild(cfg.flags)
 				or cfg.flags.NoEditAndContinue
 			then
-					debug_info = "ProgramDatabase"
+				debug_info = "ProgramDatabase"
 			else
 				debug_info = "EditAndContinue"
 			end
@@ -334,39 +456,86 @@
 	local function vs10_clcompile(cfg)
 		_p(2,'<ClCompile>')
 
+		local unsignedChar = "/J "
+		local buildoptions = cfg.buildoptions
+
+		if cfg.platform == "Orbis" then
+			unsignedChar = "-funsigned-char ";
+			_p(3,'<GenerateDebugInformation>%s</GenerateDebugInformation>', tostring(cfg.flags.Symbols ~= nil))
+		end
+
+		if cfg.language == "C" and not cfg.options.ForceCPP then
+			buildoptions = table.join(buildoptions, cfg.buildoptions_c)
+		else
+			buildoptions = table.join(buildoptions, cfg.buildoptions_cpp)
+		end
+
 		_p(3,'<AdditionalOptions>%s %s%%(AdditionalOptions)</AdditionalOptions>'
-			, table.concat(premake.esc(cfg.buildoptions), " ")
-			, iif(cfg.flags.UnsignedChar, "/J ", " ")
+			, table.concat(premake.esc(buildoptions), " ")
+			, iif(cfg.flags.UnsignedChar and cfg.platform ~= "TegraAndroid", unsignedChar, " ")
 			)
 
-		_p(3,'<Optimization>%s</Optimization>',optimisation(cfg))
+		if cfg.platform == "TegraAndroid" then
+			_p(3,'<SignedChar>%s</SignedChar>', tostring(cfg.flags.UnsignedChar == nil))
+			_p(3,'<GenerateDebugInformation>%s</GenerateDebugInformation>', tostring(cfg.flags.Symbols ~= nil))
+			if cfg.androidcppstandard then
+				_p(3,'<CppLanguageStandard>%s</CppLanguageStandard>', cfg.androidcppstandard)
+			end
+		end
+
+		if cfg.platform == "Orbis" then
+			local opt = optimisation(cfg)
+			if opt == "Disabled" then
+				_p(3,'<OptimizationLevel>Level0</OptimizationLevel>')
+			elseif opt == "MinSpace" then
+				_p(3,'<OptimizationLevel>Levelz</OptimizationLevel>') -- Oz is more aggressive than Os
+			elseif opt == "MaxSpeed" then
+				_p(3,'<OptimizationLevel>Level3</OptimizationLevel>')
+			else
+				_p(3,'<OptimizationLevel>Level2</OptimizationLevel>')
+			end
+		elseif cfg.platform == "TegraAndroid" then
+			local opt = optimisation(cfg)
+			if opt == "Disabled" then
+				_p(3,'<OptimizationLevel>O0</OptimizationLevel>')
+			elseif opt == "MinSpace" then
+				_p(3,'<OptimizationLevel>Os</OptimizationLevel>')
+			elseif opt == "MaxSpeed" then
+				_p(3,'<OptimizationLevel>O3</OptimizationLevel>')
+			else
+				_p(3,'<OptimizationLevel>O2</OptimizationLevel>')
+			end
+		else
+			_p(3,'<Optimization>%s</Optimization>', optimisation(cfg))
+		end
 
 		include_dirs(3, cfg)
+		using_dirs(3, cfg)
 		preprocessor(3, cfg)
 		minimal_build(cfg)
 
-		if  not premake.config.isoptimizedbuild(cfg.flags) then
-			if not cfg.flags.Managed then
-				_p(3,'<BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>')
+		if not premake.config.isoptimizedbuild(cfg.flags) then
+			if cfg.flags.NoRuntimeChecks then
+				_p(3, '<BasicRuntimeChecks>Default</BasicRuntimeChecks>')
+			elseif not cfg.flags.Managed then
+				_p(3, '<BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>')
 			end
 
 			if cfg.flags.ExtraWarnings then
---				_p(3,'<SmallerTypeCheck>true</SmallerTypeCheck>')
+--				_p(3, '<SmallerTypeCheck>true</SmallerTypeCheck>')
 			end
 		else
-			_p(3,'<StringPooling>true</StringPooling>')
+			_p(3, '<StringPooling>true</StringPooling>')
 		end
 
 		if cfg.platform == "Durango" or cfg.flags.NoWinRT then
 			_p(3, '<CompileAsWinRT>false</CompileAsWinRT>')
 		end
 
-		if cfg.platform ~= "Durango" then
-			_p(3,'<RuntimeLibrary>%s</RuntimeLibrary>', runtime(cfg))
-		end
+		_p(3, '<RuntimeLibrary>%s</RuntimeLibrary>', runtime(cfg))
 
 		if cfg.flags.NoBufferSecurityCheck then
-			_p(3,'<BufferSecurityCheck>false</BufferSecurityCheck>')
+			_p(3, '<BufferSecurityCheck>false</BufferSecurityCheck>')
 		end
 
 		_p(3,'<FunctionLevelLinking>true</FunctionLevelLinking>')
@@ -374,23 +543,59 @@
 		-- If we aren't running NoMultiprocessorCompilation and not wanting a minimal rebuild,
 		-- then enable MultiProcessorCompilation.
 		if not cfg.flags.NoMultiProcessorCompilation and not cfg.flags.EnableMinimalRebuild then
-			_p(3,'<MultiProcessorCompilation>true</MultiProcessorCompilation>')
+			_p(3, '<MultiProcessorCompilation>true</MultiProcessorCompilation>')
 		else
-			_p(3,'<MultiProcessorCompilation>false</MultiProcessorCompilation>')
+			_p(3, '<MultiProcessorCompilation>false</MultiProcessorCompilation>')
 		end
 
 		precompiled_header(cfg)
 
-		if cfg.flags.ExtraWarnings then
-			_p(3,'<WarningLevel>Level4</WarningLevel>')
-		elseif cfg.flags.MinimumWarnings then
-			_p(3,'<WarningLevel>Level1</WarningLevel>')
+		if cfg.platform == "Orbis" then
+			if cfg.flags.PedanticWarnings then
+				_p(3, '<Warnings>MoreWarnings</Warnings>')
+				_p(3, '<ExtraWarnings>true</ExtraWarnings>')
+			elseif cfg.flags.ExtraWarnings then
+				_p(3, '<Warnings>NormalWarnings</Warnings>')
+				_p(3, '<ExtraWarnings>true</ExtraWarnings>')
+			elseif cfg.flags.MinimumWarnings then
+				_p(3, '<Warnings>WarningsOff</Warnings>')
+				_p(3, '<ExtraWarnings>false</ExtraWarnings>')
+			else
+				_p(3, '<Warnings>NormalWarnings</Warnings>')
+				_p(3, '<ExtraWarnings>false</ExtraWarnings>')
+			end
+			if cfg.flags.FatalWarnings then
+				_p(3, '<WarningsAsErrors>true</WarningsAsErrors>')
+			end
+		elseif cfg.platform == "TegraAndroid" then
+			if cfg.flags.PedanticWarnings or cfg.flags.ExtraWarnings then
+				_p(3, '<Warnings>AllWarnings</Warnings>')
+			elseif cfg.flags.MinimumWarnings then
+				_p(3, '<Warnings>DisableAllWarnings</Warnings>')
+			else
+				_p(3, '<Warnings>NormalWarnings</Warnings>')
+			end
+			if cfg.flags.FatalWarnings then
+				_p(3, '<WarningsAsErrors>true</WarningsAsErrors>')
+			end
 		else
-			_p(3,'<WarningLevel>Level3</WarningLevel>')
+			if cfg.flags.PedanticWarnings then
+				_p(3, '<WarningLevel>EnableAllWarnings</WarningLevel>')
+			elseif cfg.flags.ExtraWarnings then
+				_p(3, '<WarningLevel>Level4</WarningLevel>')
+			elseif cfg.flags.MinimumWarnings then
+				_p(3, '<WarningLevel>Level1</WarningLevel>')
+			else
+				_p(3 ,'<WarningLevel>Level3</WarningLevel>')
+			end
 		end
 
 		if cfg.flags.FatalWarnings then
-			_p(3,'<TreatWarningAsError>true</TreatWarningAsError>')
+			_p(3, '<TreatWarningAsError>true</TreatWarningAsError>')
+		end
+
+		if premake.action.current() == premake.action.get("vs2017") then
+			cppstandard_vs2017(cfg)
 		end
 
 		exceptions(cfg)
@@ -402,12 +607,28 @@
 		debug_info(cfg)
 
 		if cfg.flags.Symbols then
-			_p(3,'<ProgramDataBaseFileName>$(OutDir)%s.pdb</ProgramDataBaseFileName>'
-				, path.getbasename(cfg.buildtarget.name))
+			-- The compiler pdb should be different than the linker pdb, and
+			-- the linker pdb is what should be distributed and used for
+			-- debugging. But in the case of static libraries, they have no
+			-- linker pdb, so then the compiler pdb should be in the output
+			-- dir instead...
+			if cfg.kind == "StaticLib" then
+				_p(3, '<ProgramDataBaseFileName>$(OutDir)%s.pdb</ProgramDataBaseFileName>'
+					, path.getbasename(cfg.buildtarget.name)
+					)
+			else
+				_p(3, '<ProgramDataBaseFileName>$(IntDir)%s.compile.pdb</ProgramDataBaseFileName>'
+					, path.getbasename(cfg.buildtarget.name)
+					)
+			end
 		end
 
 		if cfg.flags.NoFramePointer then
-			_p(3,'<OmitFramePointers>true</OmitFramePointers>')
+			_p(3, '<OmitFramePointers>true</OmitFramePointers>')
+		end
+
+		if cfg.flags.UseFullPaths then
+			_p(3, '<UseFullPaths>true</UseFullPaths>')
 		end
 
 		compile_language(cfg)
@@ -452,23 +673,15 @@
 	end
 
 	local function item_def_lib(cfg)
-       -- The Xbox360 project files are stored in another place in the project file.
+		-- The Xbox360 project files are stored in another place in the project file.
 		if cfg.kind == 'StaticLib' and cfg.platform ~= "Xbox360" then
 			_p(1,'<Lib>')
 				_p(2,'<OutputFile>$(OutDir)%s</OutputFile>',cfg.buildtarget.name)
 				additional_options(2,cfg)
 				link_target_machine(2,cfg)
-				vc2010.additionalDependencies(2,cfg)  -- for static libs, additional dependencies go in the Lib section
-				if #cfg.libdirs > 0 then
-				    _p(2,'<AdditionalLibraryDirectories>%s;%%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>'
-				        , premake.esc(path.translate(table.concat(cfg.libdirs, ';'), '\\'))
-				        )
-				end
 			_p(1,'</Lib>')
 		end
 	end
-
-
 
 	local function import_lib(cfg)
 		--Prevent the generation of an import library for a Windows DLL.
@@ -478,19 +691,87 @@
 		end
 	end
 
+	local function hasmasmfiles(prj)
+		local files = vc2010.getfilegroup(prj, "MASM")
+		return #files > 0
+	end
+
+	local function vs10_masm(prj, cfg)
+		if hasmasmfiles(prj) then
+			_p(2, '<MASM>')
+
+			_p(3,'<AdditionalOptions>%s %%(AdditionalOptions)</AdditionalOptions>'
+				, table.concat(premake.esc(table.join(cfg.buildoptions, cfg.buildoptions_asm)), " ")
+				)
+
+			local includedirs = table.join(cfg.userincludedirs, cfg.includedirs, cfg.systemincludedirs)
+
+			if #includedirs > 0 then
+				_p(3, '<IncludePaths>%s;%%(IncludePaths)</IncludePaths>'
+					, premake.esc(path.translate(table.concat(includedirs, ";"), '\\'))
+					)
+			end
+
+			-- table.join is used to create a copy rather than a reference
+			local defines = table.join(cfg.defines)
+
+			-- pre-defined preprocessor defines:
+			-- _DEBUG:  For debug configurations
+			-- _WIN32:  For 32-bit platforms
+			-- _WIN64:  For 64-bit platforms
+			-- _EXPORT: `EXPORT` for shared libraries, empty for other project kinds
+			table.insertflat(defines, iif(premake.config.isdebugbuild(cfg), "_DEBUG", {}))
+			table.insert(defines, iif(cfg.platform == "x64", "_WIN64", "_WIN32"))
+			table.insert(defines, iif(prj.kind == "SharedLib", "_EXPORT=EXPORT", "_EXPORT="))
+
+			_p(3, '<PreprocessorDefinitions>%s;%%(PreprocessorDefinitions)</PreprocessorDefinitions>'
+				, premake.esc(table.concat(defines, ";"))
+				)
+
+			if cfg.flags.FatalWarnings then
+				_p(3,'<TreatWarningsAsErrors>true</TreatWarningsAsErrors>')
+			end
+
+			-- MASM only has 3 warning levels where 3 is default, so we can ignore `ExtraWarnings`
+			if cfg.flags.MinimumWarnings then
+				_p(3,'<WarningLevel>0</WarningLevel>')
+			else
+				_p(3,'<WarningLevel>3</WarningLevel>')
+			end
+
+			_p(2, '</MASM>')
+		end
+	end
 
 --
 -- Generate the <Link> element and its children.
 --
 
 	function vc2010.link(cfg)
+		local vs2017 = premake.action.current() == premake.action.get("vs2017")
+
 		_p(2,'<Link>')
 		_p(3,'<SubSystem>%s</SubSystem>', iif(cfg.kind == "ConsoleApp", "Console", "Windows"))
-		_p(3,'<GenerateDebugInformation>%s</GenerateDebugInformation>', tostring(cfg.flags.Symbols ~= nil))
+
+		if vs2017 and cfg.flags.FullSymbols then
+			_p(3,'<GenerateDebugInformation>DebugFull</GenerateDebugInformation>')
+		else
+			_p(3,'<GenerateDebugInformation>%s</GenerateDebugInformation>', tostring(cfg.flags.Symbols ~= nil))
+		end
+
+		if cfg.flags.Symbols then
+			_p(3, '<ProgramDatabaseFile>$(OutDir)%s.pdb</ProgramDatabaseFile>'
+				, path.getbasename(cfg.buildtarget.name)
+				)
+		end
 
 		if premake.config.isoptimizedbuild(cfg.flags) then
 			_p(3,'<EnableCOMDATFolding>true</EnableCOMDATFolding>')
 			_p(3,'<OptimizeReferences>true</OptimizeReferences>')
+		end
+
+		if cfg.finalizemetasource ~= nil then
+			_p(3,'<FinalizeMetaSource>%s</FinalizeMetaSource>', premake.esc(cfg.finalizemetasource))
 		end
 
 		if cfg.kind ~= 'StaticLib' then
@@ -521,9 +802,15 @@
 			link_target_machine(3,cfg)
 			additional_options(3,cfg)
 
-            if cfg.flags.NoWinMD and vstudio.iswinrt() and prj.kind == "WindowedApp" then
+			if cfg.flags.NoWinMD and vstudio.iswinrt() and prj.kind == "WindowedApp" then
 				_p(3,'<GenerateWindowsMetadata>false</GenerateWindowsMetadata>' )
-            end
+			end
+		end
+
+		if cfg.platform == "TegraAndroid" then
+			if cfg.androidlinker then
+				_p(3,'<UseLinker>%s</UseLinker>',cfg.androidlinker)
+			end
 		end
 
 		_p(2,'</Link>')
@@ -539,13 +826,73 @@
 	function vc2010.additionalDependencies(tab,cfg)
 		local links = premake.getlinks(cfg, "system", "fullpath")
 		if #links > 0 then
-			_p(tab,'<AdditionalDependencies>%s;%s</AdditionalDependencies>'
-				, table.concat(links, ";")
+			local deps = ""
+			if cfg.platform == "Orbis" then
+				for _, v in ipairs(links) do
+					deps = deps .. "-l" .. v .. ";"
+				end
+			else
+				deps = table.concat(links, ";")
+			end
+
+			-- On Android, we need to shove a linking group in to resolve libs
+			-- with circular deps.
+			if cfg.platform == "TegraAndroid" then
+				deps = "-Wl,--start-group;" .. deps .. ";-Wl,--end-group"
+			end
+
+			_p(tab, '<AdditionalDependencies>%s;%s</AdditionalDependencies>'
+				, deps
 				, iif(cfg.platform == "Durango"
-					, '$(XboxExtensionsDependencies)'
+					, '%(XboxExtensionsDependencies)'
 					, '%(AdditionalDependencies)'
 					)
 				)
+		elseif cfg.platform == "Durango" then
+			_p(tab, '<AdditionalDependencies>%%(XboxExtensionsDependencies)</AdditionalDependencies>')
+		end
+	end
+
+--
+-- Generate the <AntBuild> element and its children.
+--
+
+	function ant_build(prj, cfg)
+		-- only include this bit for Tegra
+		if cfg.platform == "TegraAndroid" then
+			local files = vc2010.getfilegroup(prj, "AndroidBuild")
+			_p(2,'<AntBuild>')
+			if #files > 0 then
+				_p(3,'<AndroidManifestLocation>%s</AndroidManifestLocation>',path.translate(files[1].name))
+			end
+			local isdebugbuild = premake.config.isdebugbuild(cfg)
+			_p(3,'<AntBuildType>%s</AntBuildType>',iif(isdebugbuild, 'Debug','Release'))
+			_p(3,'<Debuggable>%s</Debuggable>',tostring(cfg.flags.AntBuildDebuggable ~= nil))
+			if #cfg.antbuildjavasourcedirs > 0 then
+				local dirs = table.concat(cfg.antbuildjavasourcedirs,";")
+				_p(3,'<JavaSourceDir>%s</JavaSourceDir>',dirs)
+			end
+			if #cfg.antbuildjardirs > 0 then
+				local dirs = table.concat(cfg.antbuildjardirs,";")
+				_p(3,'<JarDirectories>%s</JarDirectories>',dirs)
+			end
+			if #cfg.antbuildjardependencies > 0 then
+				local dirs = table.concat(cfg.antbuildjardependencies,";")
+				_p(3,'<JarDependencies>%s</JarDependencies>',dirs)
+			end
+			if #cfg.antbuildnativelibdirs > 0 then
+				local dirs = table.concat(cfg.antbuildnativelibdirs,";")
+				_p(3,'<NativeLibDirectories>%s</NativeLibDirectories>',dirs)
+			end
+			if #cfg.antbuildnativelibdependencies > 0 then
+				local dirs = table.concat(cfg.antbuildnativelibdependencies,";")
+				_p(3,'<NativeLibDependencies>%s</NativeLibDependencies>',dirs)
+			end
+			if #cfg.antbuildassetsdirs > 0 then
+				local dirs = table.concat(cfg.antbuildassetsdirs,";")
+				_p(3,'<AssetsDirectories>%s</AssetsDirectories>',dirs)
+			end
+			_p(2,'</AntBuild>')
 		end
 	end
 
@@ -559,15 +906,16 @@
 				resource_compile(cfg)
 				item_def_lib(cfg)
 				vc2010.link(cfg)
+				ant_build(prj, cfg)
 				event_hooks(cfg)
+				vs10_masm(prj, cfg)
 			_p(1,'</ItemDefinitionGroup>')
 		end
 	end
 
-
 --
--- Retrieve a list of files for a particular build group, one of
--- "ClInclude", "ClCompile", "ResourceCompile", and "None".
+-- Retrieve a list of files for a particular build group, like
+-- "ClInclude", "ClCompile", "ResourceCompile", "MASM", "None", etc.
 --
 
 	function vc2010.getfilegroup(prj, group)
@@ -576,26 +924,40 @@
 			sortedfiles = {
 				ClCompile = {},
 				ClInclude = {},
+				MASM = {},
+				Object = {},
 				None = {},
 				ResourceCompile = {},
 				AppxManifest = {},
+				AndroidBuild = {},
+				Natvis = {},
 				Image = {},
 				DeploymentContent = {}
 			}
 
 			local foundAppxManifest = false
-			for file in premake.project.eachfile(prj) do
-				if path.isSourceFileVS(file.name) then
+			for file in premake.project.eachfile(prj, true) do
+				if path.issourcefilevs(file.name) then
 					table.insert(sortedfiles.ClCompile, file)
 				elseif path.iscppheader(file.name) then
 					if not table.icontains(prj.removefiles, file) then
 						table.insert(sortedfiles.ClInclude, file)
 					end
+				elseif path.isobjectfile(file.name) then
+					table.insert(sortedfiles.Object, file)
 				elseif path.isresourcefile(file.name) then
 					table.insert(sortedfiles.ResourceCompile, file)
+				elseif path.isimagefile(file.name) then
+					table.insert(sortedfiles.Image, file)
 				elseif path.isappxmanifest(file.name) then
 					foundAppxManifest = true
 					table.insert(sortedfiles.AppxManifest, file)
+				elseif path.isandroidbuildfile(file.name) then
+					table.insert(sortedfiles.AndroidBuild, file)
+				elseif path.isnatvis(file.name) then
+					table.insert(sortedfiles.Natvis, file)
+				elseif path.isasmfile(file.name) then
+					table.insert(sortedfiles.MASM, file)
 				elseif file.flags and table.icontains(file.flags, "DeploymentContent") then
 					table.insert(sortedfiles.DeploymentContent, file)
 				else
@@ -649,10 +1011,13 @@
 	function vc2010.files(prj)
 		vc2010.simplefilesgroup(prj, "ClInclude")
 		vc2010.compilerfilesgroup(prj)
+		vc2010.simplefilesgroup(prj, "Object")
 		vc2010.simplefilesgroup(prj, "None")
 		vc2010.customtaskgroup(prj)
 		vc2010.simplefilesgroup(prj, "ResourceCompile")
 		vc2010.simplefilesgroup(prj, "AppxManifest")
+		vc2010.simplefilesgroup(prj, "AndroidBuild")
+		vc2010.simplefilesgroup(prj, "Natvis")
 		vc2010.deploymentcontentgroup(prj, "Image")
 		vc2010.deploymentcontentgroup(prj, "DeploymentContent", "None")
 	end
@@ -757,12 +1122,29 @@
 			end
 
 			_p(1,'<ItemGroup>')
+			local existingBasenames = {};
 			for _, file in ipairs(files) do
+				-- Having unique ObjectFileName for each file subverts MSBuilds ability to parallelize compilation with the /MP flag.
+				-- Instead we detect duplicates and partition them in subfolders only if needed.
+				local filename = string.lower(path.getbasename(file.name))
+				local disambiguation = existingBasenames[filename] or 0;
+				existingBasenames[filename] = disambiguation + 1
+
 				local translatedpath = path.translate(file.name, "\\")
 				_p(2, '<ClCompile Include=\"%s\">', translatedpath)
-				_p(3, '<ObjectFileName>$(IntDir)%s\\</ObjectFileName>'
-					, premake.esc(path.translate(path.trimdots(path.getdirectory(file.name))))
-					)
+
+				for _, vsconfig in ipairs(configs) do
+					-- Android and NX need a full path to an object file, not a dir.
+					local cfg = premake.getconfig(prj, vsconfig.src_buildcfg, vsconfig.src_platform)
+					local namestyle = premake.getnamestyle(cfg)
+					if namestyle == "TegraAndroid" or namestyle == "NX" then
+						_p(3, '<ObjectFileName '.. if_config_and_platform() .. '>$(IntDir)%s.o</ObjectFileName>', premake.esc(vsconfig.name), premake.esc(path.translate(path.trimdots(path.removeext(file.name)))) )
+					else
+						if disambiguation > 0 then
+							_p(3, '<ObjectFileName '.. if_config_and_platform() .. '>$(IntDir)%s\\</ObjectFileName>', premake.esc(vsconfig.name), tostring(disambiguation))
+						end
+					end
+				end
 
 				if path.iscxfile(file.name) then
 					_p(3, '<CompileAsWinRT>true</CompileAsWinRT>')
@@ -793,7 +1175,10 @@
 				local excluded = table.icontains(prj.excludes, file.name)
 				for _, vsconfig in ipairs(configs) do
 					local cfg = premake.getconfig(prj, vsconfig.src_buildcfg, vsconfig.src_platform)
-					if excluded or table.icontains(cfg.excludes, file.name) then
+					local fileincfg = table.icontains(cfg.files, file.name)
+					local cfgexcluded = table.icontains(cfg.excludes, file.name)
+
+					if excluded or not fileincfg or cfgexcluded then
 						_p(3, '<ExcludedFromBuild '
 							.. if_config_and_platform()
 							.. '>true</ExcludedFromBuild>'
@@ -802,9 +1187,49 @@
 					end
 				end
 
+				if prj.flags and prj.flags.Managed then
+					local prjforcenative = table.icontains(prj.forcenative, file.name)
+					for _,vsconfig in ipairs(configs) do
+						local cfg = premake.getconfig(prj, vsconfig.src_buildcfg, vsconfig.src_platform)
+						if prjforcenative or table.icontains(cfg.forcenative, file.name) then
+							_p(3, '<CompileAsManaged ' .. if_config_and_platform() .. '>false</CompileAsManaged>', premake.esc(vsconfig.name))
+						end
+					end
+				end
+
 				_p(2,'</ClCompile>')
 			end
 			_p(1,'</ItemGroup>')
+		end
+	end
+
+	function vc2010.masmfiles(prj)
+		local configs = prj.solution.vstudio_configs
+		local files = vc2010.getfilegroup(prj, "MASM")
+		if #files > 0 then
+			_p(1, '<ItemGroup>')
+			for _, file in ipairs(files) do
+				local translatedpath = path.translate(file.name, "\\")
+				_p(2, '<MASM Include="%s">', translatedpath)
+
+				local excluded = table.icontains(prj.excludes, file.name)
+				for _, vsconfig in ipairs(configs) do
+					local cfg = premake.getconfig(prj, vsconfig.src_buildcfg, vsconfig.src_platform)
+					local fileincfg = table.icontains(cfg.files, file.name)
+					local cfgexcluded = table.icontains(cfg.excludes, file.name)
+
+					if excluded or not fileincfg or cfgexcluded then
+						_p(3, '<ExcludedFromBuild '
+							.. if_config_and_platform()
+							.. '>true</ExcludedFromBuild>'
+							, premake.esc(vsconfig.name)
+							)
+					end
+				end
+
+				_p(2, '</MASM>')
+			end
+			_p(1, '</ItemGroup>')
 		end
 	end
 
@@ -831,6 +1256,8 @@
 --
 
 	function premake.vs2010_vcxproj(prj)
+		local usemasm = hasmasmfiles(prj)
+
 		io.indent = "  "
 		vc2010.header("Build")
 
@@ -846,10 +1273,11 @@
 
 			_p(1,'<Import Project="$(VCTargetsPath)\\Microsoft.Cpp.props" />')
 
-			--check what this section is doing
 			_p(1,'<ImportGroup Label="ExtensionSettings">')
+			if usemasm then
+				_p(2, '<Import Project="$(VCTargetsPath)\\BuildCustomizations\\masm.props" />')
+			end
 			_p(1,'</ImportGroup>')
-
 
 			import_props(prj)
 
@@ -861,15 +1289,44 @@
 			item_definitions(prj)
 
 			vc2010.files(prj)
+			vc2010.clrReferences(prj)
 			vc2010.projectReferences(prj)
+			vc2010.sdkReferences(prj)
+			vc2010.masmfiles(prj)
 
 			_p(1,'<Import Project="$(VCTargetsPath)\\Microsoft.Cpp.targets" />')
 			_p(1,'<ImportGroup Label="ExtensionTargets">')
+			if usemasm then
+				_p(2, '<Import Project="$(VCTargetsPath)\\BuildCustomizations\\masm.targets" />')
+			end
 			_p(1,'</ImportGroup>')
 
 		_p('</Project>')
 	end
 
+--
+-- Generate the list of CLR references
+--
+	function vc2010.clrReferences(prj)
+		if #prj.clrreferences == 0 then
+			return
+		end
+
+		_p(1,'<ItemGroup>')
+
+		for _, ref in ipairs(prj.clrreferences) do
+			if os.isfile(ref) then
+				local assembly = path.getbasename(ref)
+				_p(2,'<Reference Include="%s">', assembly)
+				_p(3,'<HintPath>%s</HintPath>', path.getrelative(prj.location, ref))
+				_p(2,'</Reference>')
+			else
+				_p(2,'<Reference Include="%s" />', ref)
+			end
+		end
+
+		_p(1,'</ItemGroup>')
+	end
 
 --
 -- Generate the list of project dependencies.
@@ -877,43 +1334,93 @@
 
 	function vc2010.projectReferences(prj)
 		local deps = premake.getdependencies(prj)
-		if #deps > 0 then
+
+		if #deps == 0 and #prj.vsimportreferences == 0 then
+			return
+		end
+
+		_p(1,'<ItemGroup>')
+
+		for _, dep in ipairs(deps) do
+			local deppath = path.getrelative(prj.location, vstudio.projectfile(dep))
+			_p(2,'<ProjectReference Include=\"%s\">', path.translate(deppath, "\\"))
+			_p(3,'<Project>{%s}</Project>', dep.uuid)
+			if vstudio.iswinrt() then
+				_p(3,'<ReferenceOutputAssembly>false</ReferenceOutputAssembly>')
+			end
+			_p(2,'</ProjectReference>')
+		end
+
+		for _, ref in ipairs(prj.vsimportreferences) do
+			local iprj = premake.vstudio.getimportprj(ref, prj.solution)
+			_p(2,'<ProjectReference Include=\"%s\">', iprj.relpath)
+			_p(3,'<Project>{%s}</Project>', iprj.uuid)
+			_p(2,'</ProjectReference>')
+		end
+
+		_p(1,'</ItemGroup>')
+	end
+
+--
+-- Generate the list of SDK references
+--
+
+	function vc2010.sdkReferences(prj)
+		local refs = prj.sdkreferences
+		if #refs > 0 then
 			_p(1,'<ItemGroup>')
-			for _, dep in ipairs(deps) do
-				local deppath = path.getrelative(prj.location, vstudio.projectfile(dep))
-				_p(2,'<ProjectReference Include=\"%s\">', path.translate(deppath, "\\"))
-				_p(3,'<Project>{%s}</Project>', dep.uuid)
-				if vstudio.iswinrt() then
-					_p(3,'<ReferenceOutputAssembly>false</ReferenceOutputAssembly>')
-				end
-				_p(2,'</ProjectReference>')
+			for _, ref in ipairs(refs) do
+				_p(2,'<SDKReference Include=\"%s\" />', ref)
 			end
 			_p(1,'</ItemGroup>')
 		end
 	end
-
 
 --
 -- Generate the .vcxproj.user file
 --
 
 	function vc2010.debugdir(cfg)
-		if cfg.debugdir and not vstudio.iswinrt() then
-			_p('    <LocalDebuggerWorkingDirectory>%s</LocalDebuggerWorkingDirectory>', path.translate(cfg.debugdir, '\\'))
-			_p('    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>')
-		end
-		if cfg.debugargs then
-			_p('    <LocalDebuggerCommandArguments>%s</LocalDebuggerCommandArguments>', table.concat(cfg.debugargs, " "))
-		end
-	end
+		local debuggerFlavor =
+			  iif(cfg.platform == "Orbis",        'ORBISDebugger'
+			, iif(cfg.platform == "Durango",      'XboxOneVCppDebugger'
+			, iif(cfg.platform == "TegraAndroid", 'AndroidDebugger'
+			, iif(vstudio.iswinrt(),              'AppHostLocalDebugger'
+			,                                     'WindowsLocalDebugger'
+			))))
+		_p(2, '<DebuggerFlavor>%s</DebuggerFlavor>', debuggerFlavor)
 
-	function vc2010.debugenvs(cfg)
+		if cfg.debugdir and not vstudio.iswinrt() then
+			_p(2, '<LocalDebuggerWorkingDirectory>%s</LocalDebuggerWorkingDirectory>'
+				, path.translate(cfg.debugdir, '\\')
+				)
+		end
+
+		if cfg.debugargs then
+			_p(2, '<LocalDebuggerCommandArguments>%s</LocalDebuggerCommandArguments>'
+				, table.concat(cfg.debugargs, " ")
+				)
+		end
+
 		if cfg.debugenvs and #cfg.debugenvs > 0 then
-			_p(2,'<LocalDebuggerEnvironment>%s%s</LocalDebuggerEnvironment>',table.concat(cfg.debugenvs, "\n")
-					,iif(cfg.flags.DebugEnvsInherit,'\n$(LocalDebuggerEnvironment)','')
+			_p(2, '<LocalDebuggerEnvironment>%s%s</LocalDebuggerEnvironment>'
+				, table.concat(cfg.debugenvs, "\n")
+				, iif(cfg.flags.DebugEnvsInherit,'\n$(LocalDebuggerEnvironment)', '')
 				)
 			if cfg.flags.DebugEnvsDontMerge then
-				_p(2,'<LocalDebuggerMergeEnvironment>false</LocalDebuggerMergeEnvironment>')
+				_p(2, '<LocalDebuggerMergeEnvironment>false</LocalDebuggerMergeEnvironment>')
+			end
+		end
+
+		if cfg.deploymode then
+			_p(2, '<DeployMode>%s</DeployMode>', cfg.deploymode)
+		end
+
+		if cfg.platform == "TegraAndroid" then
+			if cfg.androiddebugintentparams then
+				_p(2, '<IntentParams>%s</IntentParams>'
+					, table.concat(cfg.androiddebugintentparams, " ")
+					)
 			end
 		end
 	end
@@ -925,7 +1432,6 @@
 			local cfg = premake.getconfig(prj, cfginfo.src_buildcfg, cfginfo.src_platform)
 			_p('  <PropertyGroup '.. if_config_and_platform() ..'>', premake.esc(cfginfo.name))
 			vc2010.debugdir(cfg)
-			vc2010.debugenvs(cfg)
 			_p('  </PropertyGroup>')
 		end
 		_p('</Project>')
@@ -956,22 +1462,25 @@
 		io.indent = "  "
 		io.eol = "\r\n"
 		_p('<?xml version="1.0" encoding="utf-8"?>')
-		if vstudio.toolset == "v120_wp81" then
-			_p('<Package xmlns="http://schemas.microsoft.com/appx/2010/manifest" xmlns:m2="http://schemas.microsoft.com/appx/2013/manifest" xmlns:m3="http://schemas.microsoft.com/appx/2014/manifest" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest">')
-		elseif vstudio.storeapp == "8.1" then
-			_p('<Package xmlns="http://schemas.microsoft.com/appx/2010/manifest" xmlns:m3="http://schemas.microsoft.com/appx/2013/manifest">')
+		if vstudio.storeapp == "10.0" then
+			_p('<Package')
+			_p(1, 'xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"')
+			_p(1, 'xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"')
+			_p(1, 'xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"')
+			_p(1, 'IgnorableNamespaces="uap mp">')
 		elseif vstudio.storeapp == "durango" then
 			_p('<Package xmlns="http://schemas.microsoft.com/appx/2010/manifest" xmlns:mx="http://schemas.microsoft.com/appx/2013/xbox/manifest" IgnorableNamespaces="mx">')
-		else
-			_p('<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" xmlns:m3="http://schemas.microsoft.com/appx/manifest/uap/windows10">')
 		end
 
-		_p(1,'<Identity Name="' .. prj.uuid .. '"')
-		_p(2,'Publisher="CN=Publisher"')
-		_p(2,'Version="1.0.0.0" />')
+		_p(1, '<Identity')
+		_p(2, 'Name="' .. prj.uuid .. '"')
+		_p(2, 'Publisher="CN=Publisher"')
+		_p(2, 'Version="1.0.0.0" />')
 
-		if vstudio.toolset == "v120_wp81" or vstudio.storeapp == "8.2" then
-			_p(1,'<mp:PhoneIdentity PhoneProductId="' .. prj.uuid .. '" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>')
+		if vstudio.storeapp == "10.0" then
+			_p(1, '<mp:PhoneIdentity')
+			_p(2, 'PhoneProductId="' .. prj.uuid .. '"')
+			_p(2, 'PhonePublisherId="00000000-0000-0000-0000-000000000000"/>')
 		end
 
 		_p(1, '<Properties>')
@@ -983,7 +1492,7 @@
 
 		_p(1,'</Properties>')
 
-		if vstudio.storeapp == "8.2" then
+		if vstudio.storeapp == "10.0" then
 			_p(1, '<Dependencies>')
 			_p(2, '<TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.10069.0" MaxVersionTested="10.0.10069.0" />')
 			_p(1, '</Dependencies>')
@@ -992,22 +1501,34 @@
 			_p(2, '<OSMinVersion>6.2</OSMinVersion>')
 			_p(2, '<OSMaxVersionTested>6.2</OSMaxVersionTested>')
 			_p(1, '</Prerequisites>')
-		else
-			_p(1, '<Prerequisites>')
-			_p(2, '<OSMinVersion>6.3.0</OSMinVersion>')
-			_p(2, '<OSMaxVersionTested>6.3.0</OSMaxVersionTested>')
-			_p(1, '</Prerequisites>')
 		end
 
-		_p(1,'<Resources>')
-		_p(2,'<Resource Language="en-us"/>')
-		_p(1,'</Resources>')
+		_p(1, '<Resources>')
+		_p(2, '<Resource Language="en-us"/>')
+		_p(1, '</Resources>')
 
-		_p(1,'<Applications>')
-		_p(2,'<Application Id="App"')
-		_p(3,'Executable="$targetnametoken$.exe"')
-		_p(3,'EntryPoint="' .. prj.name .. '.App">')
-		if vstudio.storeapp == "durango" then
+		_p(1, '<Applications>')
+		_p(2, '<Application Id="App"')
+		_p(3, 'Executable="$targetnametoken$.exe"')
+		_p(3, 'EntryPoint="' .. prj.name .. '.App">')
+		if vstudio.storeapp == "10.0" then
+			_p(3, '<uap:VisualElements')
+			_p(4, 'DisplayName="' .. prj.name .. '"')
+			_p(4, 'Square150x150Logo="' .. prj.name .. '\\Logo.png"')
+			png1x1(prj, "%%/Logo.png")
+			if vstudio.storeapp == "10.0" then
+				_p(4, 'Square44x44Logo="' .. prj.name .. '\\SmallLogo.png"')
+				png1x1(prj, "%%/SmallLogo.png")
+			else
+				_p(4, 'Square30x30Logo="' .. prj.name .. '\\SmallLogo.png"')
+				png1x1(prj, "%%/SmallLogo.png")
+			end
+			_p(4, 'Description="' .. prj.name .. '"')
+			_p(4, 'BackgroundColor="transparent">')
+			_p(4, '<uap:SplashScreen Image="' .. prj.name .. '\\SplashScreen.png" />')
+			png1x1(prj, "%%/SplashScreen.png")
+			_p(3, '</uap:VisualElements>')
+		elseif vstudio.storeapp == "durango" then
 			_p(3, '<VisualElements')
 			_p(4, 'DisplayName="' .. prj.name .. '"')
 			_p(4, 'Logo="' .. prj.name .. '\\Logo.png"')
@@ -1025,27 +1546,9 @@
 			_p(4, '<mx:XboxSystemResources />')
 			_p(4, '</mx:Extension>')
 			_p(3, '</Extensions>')
-		else
-			_p(3, '<m3:VisualElements')
-			_p(4, 'DisplayName="' .. prj.name .. '"')
-			_p(4, 'Square150x150Logo="' .. prj.name .. '\\Logo.png"')
-			png1x1(prj, "%%/Logo.png")
-			if vstudio.toolset == "v120_wp81" or vstudio.storeapp == "8.2" then
-				_p(4, 'Square44x44Logo="' .. prj.name .. '\\SmallLogo.png"')
-				png1x1(prj, "%%/SmallLogo.png")
-			else
-				_p(4, 'Square30x30Logo="' .. prj.name .. '\\SmallLogo.png"')
-				png1x1(prj, "%%/SmallLogo.png")
-			end
-			_p(4, 'Description="' .. prj.name .. '"')
-			_p(4, 'ForegroundText="light"')
-			_p(4, 'BackgroundColor="transparent">')
-			_p(4, '<m3:SplashScreen Image="' .. prj.name .. '\\SplashScreen.png"')
-			png1x1(prj, "%%/SplashScreen.png")
-			_p(3, '</m3:VisualElements>')
 		end
-		_p(2,'</Application>')
-		_p(1,'</Applications>')
+		_p(2, '</Application>')
+		_p(1, '</Applications>')
 
 		_p('</Package>')
 	end

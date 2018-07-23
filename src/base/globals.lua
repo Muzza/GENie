@@ -80,6 +80,18 @@
 			nosharedlibs    = true,
 			namestyle       = "windows",
 		},
+		TegraAndroid =
+		{
+			cfgsuffix       = "tegraandroid",
+			iscrosscompiler = true,
+			namestyle       = "TegraAndroid",
+		},
+		NX64 =
+		{
+			cfgsuffix       = "nx64",
+			iscrosscompiler = true,
+			namestyle       = "NX",
+		},
 	}
 
 
@@ -163,18 +175,17 @@
 
 
 --
--- An extension to type() to identify project object types by reading the
+-- An extended type API to identify project object types by reading the
 -- "__type" field from the metatable.
 --
 
-	local builtin_type = type
-	function type(t)
+	function typex(t)
 		local mt = getmetatable(t)
 		if (mt) then
 			if (mt.__type) then
 				return mt.__type
 			end
 		end
-		return builtin_type(t)
+		return type(t)
 	end
 
