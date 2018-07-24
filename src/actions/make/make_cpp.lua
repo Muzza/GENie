@@ -539,14 +539,33 @@
 
 		for _, file in ipairs(prj.allfiles or {}) do
 			if path.issourcefile(file) then
+
+				-- check if file is in nopch list
+				local isnopch = table.icontains(prj.nopch, file)
+				for _, platform in ipairs(platforms) do
+					for cfg in premake.eachconfig(prj, platform) do
+						if table.icontains(cfg.nopch, file) then
+							isnopch = true
+						end
+					end
+				end
+		
 				if (path.isobjcfile(file)) then
-					_p('$(OBJDIR)/%s.o: %s $(GCH_OBJC) $(MAKEFILE) | $(OBJDIR)/%s'
+					local gch = '$(GCH_OBJC)'
+					if isnopch then
+						gch = ''
+					end
+					_p('$(OBJDIR)/%s.o: %s ' .. gch .. ' $(MAKEFILE) | $(OBJDIR)/%s'
 						, _MAKE.esc(path.trimdots(path.removeext(file)))
 						, _MAKE.esc(file)
 						, _MAKE.esc(path.getdirectory(path.trimdots(file)))
 						)
 				else
-					_p('$(OBJDIR)/%s.o: %s $(GCH) $(MAKEFILE) | $(OBJDIR)/%s'
+					local gch = '$(GCH)'
+					if isnopch then
+						gch = ''
+					end
+					_p('$(OBJDIR)/%s.o: %s ' .. gch .. ' $(MAKEFILE) | $(OBJDIR)/%s'
 						, _MAKE.esc(path.trimdots(path.removeext(file)))
 						, _MAKE.esc(file)
 						, _MAKE.esc(path.getdirectory(path.trimdots(file)))
@@ -560,15 +579,19 @@
 					_p('\t@echo $(notdir $<)')
 				end
 				if (path.isobjcfile(file)) then
+					local fi = '$(FORCE_INCLUDE_OBJC)'
+					if isnopch then
+						fi = ''
+					end
 					if (path.iscfile(file)) then
-						_p('\t$(SILENT) $(CXX) $(ALL_OBJCFLAGS) $(FORCE_INCLUDE_OBJC) -o "$@" -c "$<"')
+						_p('\t$(SILENT) $(CXX) $(ALL_OBJCFLAGS) ' .. fi .. '  -o "$@" -c "$<"')
 					else
-						_p('\t$(SILENT) $(CXX) $(ALL_OBJCPPFLAGS) $(FORCE_INCLUDE_OBJC) -o "$@" -c "$<"')
+						_p('\t$(SILENT) $(CXX) $(ALL_OBJCPPFLAGS) ' .. fi .. ' -o "$@" -c "$<"')
 					end
 				elseif (path.isasmfile(file)) then
 					_p('\t$(SILENT) $(CC) $(ALL_ASMFLAGS) -o "$@" -c "$<"')
 				else
-					cpp.buildcommand(path.iscfile(file) and not prj.options.ForceCPP, "o")
+					cpp.buildcommand(path.iscfile(file) and not prj.options.ForceCPP, "o", isnopch)
 				end
 				for _, task in ipairs(prj.postcompiletasks or {}) do
 					_p('\t$(SILENT) %s', task)
@@ -609,7 +632,11 @@
 	end
 
 
-	function cpp.buildcommand(iscfile, objext)
+	function cpp.buildcommand(iscfile, objext, isnopch)
+		local fi = '$(FORCE_INCLUDE)'
+		if isnopch then
+			fi = ''
+		end
 		local flags = iif(iscfile, '$(CC) $(ALL_CFLAGS)', '$(CXX) $(ALL_CXXFLAGS)')
-		_p('\t$(SILENT) %s $(FORCE_INCLUDE) -o "$@" -c "$<"', flags, objext)
+		_p('\t$(SILENT) %s ' .. fi .. ' -o "$@" -c "$<"', flags, objext)
 	end
